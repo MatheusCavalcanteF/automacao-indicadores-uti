@@ -1,0 +1,9 @@
+# Dados hospitalares (planilhas, PDFs, relatórios com informação de pacientes) e saídas geradas
+dados_entrada/*
+relatorios_gerados/*
+mapa_variaveis.txt
+# Modelos Word: o junho_convertido.docx contém nomes de pacientes; o modelo é gerado por scripts/montar_template.py
+templates/*
+!*/.gitkeep
+__pycache__/
+*.pyc
