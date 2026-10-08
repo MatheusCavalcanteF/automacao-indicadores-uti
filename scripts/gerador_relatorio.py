@@ -7,15 +7,23 @@ O contexto leva números crus; a formatação é feita no template por filtros J
   {{ serie__x | dia(3) }}               -> valor do 3º dia da série 'x'
 Variável inexistente não quebra a geração: aparece como [Sem Dados] e é listada.
 Valores já pendentes (strings) passam pelos filtros sem alteração.
+
+Se houver avisos críticos ou pendências, o documento ganha uma primeira página
+"AVISOS CRÍTICOS E PENDÊNCIAS" listando-os (ver inserir_pagina_avisos).
 """
 
+import re
+import zipfile
 from pathlib import Path
 
 import jinja2
 from docx import Document
+from docx.enum.text import WD_BREAK
+from docx.shared import Pt, RGBColor
 from docxtpl import DocxTemplate
 
-from extracao_producao import chave_variavel, extrair_dados_diarios
+from extracao_producao import chave_variavel
+from utils import eh_numero as _numerico, periodo_da_cli
 
 RAIZ = Path(__file__).resolve().parent.parent
 
@@ -23,6 +31,17 @@ chave_template = chave_variavel
 
 
 SEM_DADOS = "[Sem Dados]"
+
+# Seções da página de avisos: (categoria, título). Só CRITICO, FONTE e PENDENCIA fazem a página aparecer;
+# CONFERIR entra junto quando a página existe.
+SECOES_AVISOS = (
+    ("CRITICO", "Erros não corrigidos automaticamente"),
+    ("FONTE", "Fontes de dados ausentes"),
+    ("PENDENCIA", "Pendências de preenchimento"),
+    ("CONFERIR", "Divergências a conferir"),
+)
+CATEGORIAS_QUE_EXIGEM_PAGINA = ("CRITICO", "FONTE", "PENDENCIA")
+VERMELHO = RGBColor(0xC0, 0x00, 0x00)
 
 
 class _Faltante(jinja2.Undefined):
@@ -39,10 +58,6 @@ class _Faltante(jinja2.Undefined):
 
 def _br(valor, casas):
     return f"{valor:.{casas}f}".replace(".", ",")
-
-
-def _numerico(valor):
-    return isinstance(valor, (int, float)) and not isinstance(valor, bool)
 
 
 def _texto(valor):
@@ -80,12 +95,29 @@ def _ambiente():
 
 
 def montar_contexto(dados, extras=None, series=None):
-    """{variável: número} + extras (mês, ano...) + séries diárias como 'serie__<variável>'."""
+    """{variável: número} + extras (mês, ano...) + séries diárias como 'serie__<variável>'.
+
+    Com extras["n_dias"], cada série é cortada nesse número de dias: as colunas de dia que o mês
+    não tem (29–31) saem em branco no Word, mesmo que a aba traga colunas a mais.
+    """
+    extras = extras or {}
+    n_dias = extras.get("n_dias")
     contexto = dict(dados)
     for chave, valores in (series or {}).items():
-        contexto[f"serie__{chave}"] = valores
-    contexto.update(extras or {})
+        contexto[f"serie__{chave}"] = list(valores[:n_dias]) if n_dias else valores
+    contexto.update(extras)
     return contexto
+
+
+def dias_no_modelo(caminho_template):
+    """Maior N usado em `dia(N)` no modelo (= colunas de dia das tabelas diárias), ou None se não houver."""
+    try:
+        with zipfile.ZipFile(caminho_template) as z:
+            xml = z.read("word/document.xml").decode("utf-8")
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return None
+    dias = [int(n) for n in re.findall(r"dia\(\s*(\d+)\s*\)", xml)]
+    return max(dias) if dias else None
 
 
 def criar_template_exemplo(caminho_template, dados):
@@ -100,8 +132,51 @@ def criar_template_exemplo(caminho_template, dados):
     doc.save(caminho_template)
 
 
-def gerar_relatorio_word(dados, caminho_template, caminho_saida, extras=None, series=None):
-    """Renderiza o template e salva em caminho_saida. Retorna (Path salvo, variáveis faltantes)."""
+def exige_pagina_avisos(avisos):
+    return any(avisos.get(c) for c in CATEGORIAS_QUE_EXIGEM_PAGINA)
+
+
+def inserir_pagina_avisos(doc, avisos, referencia=""):
+    """Insere no início de `doc` (python-docx) a página "AVISOS CRÍTICOS E PENDÊNCIAS".
+
+    avisos: {categoria: [mensagens]} com as categorias de SECOES_AVISOS. Usa formatação direta, não
+    estilos de título, para a página não entrar no sumário do relatório.
+    """
+    paragrafos = []
+
+    def linha(texto, tamanho=11, negrito=False, cor=None):
+        p = doc.add_paragraph()
+        run = p.add_run(texto)
+        run.bold, run.font.size = negrito, Pt(tamanho)
+        if cor is not None:
+            run.font.color.rgb = cor
+        paragrafos.append(p)
+        return p
+
+    linha("AVISOS CRÍTICOS E PENDÊNCIAS", 16, True, VERMELHO)
+    linha(f"Relatório gerado automaticamente{' — ' + referencia if referencia else ''}. Resolva os itens "
+          "abaixo e remova esta página antes de enviar o relatório.", 10)
+    for categoria, titulo in SECOES_AVISOS:
+        itens = avisos.get(categoria) or []
+        if not itens:
+            continue
+        linha(f"{titulo} ({len(itens)})", 12, True, VERMELHO if categoria in ("CRITICO", "FONTE") else None)
+        for item in itens:
+            linha(f"•  {item}", 10)
+    paragrafos[-1].add_run().add_break(WD_BREAK.PAGE)
+
+    corpo = doc.element.body
+    for i, p in enumerate(paragrafos):
+        corpo.insert(i, p._p)  # add_paragraph anexou no fim; move para o topo, na ordem
+
+
+def gerar_relatorio_word(dados, caminho_template, caminho_saida, extras=None, series=None, avisos=None):
+    """Renderiza o template e salva em caminho_saida.
+
+    avisos: {categoria: [mensagens]} (ver SECOES_AVISOS). As variáveis do modelo sem valor entram como
+    PENDENCIA; se houver CRITICO, FONTE ou PENDENCIA, a página de avisos é inserida no início.
+    Retorna (Path salvo, variáveis faltantes, página de avisos inserida?).
+    """
     caminho_template = Path(caminho_template)
     if not caminho_template.is_file():
         raise FileNotFoundError(f"Template não encontrado: {caminho_template}")
@@ -112,6 +187,18 @@ def gerar_relatorio_word(dados, caminho_template, caminho_saida, extras=None, se
         modelo.render(montar_contexto(dados, extras, series), _ambiente())
     except Exception as e:
         raise ValueError(f"Falha ao renderizar '{caminho_template.name}': {e}") from e
+    faltantes = sorted(_Faltante.registro)
+
+    avisos = {c: list(v) for c, v in (avisos or {}).items()}
+    if faltantes:
+        avisos.setdefault("PENDENCIA", []).append(
+            f"{len(faltantes)} variável(is) do modelo sem valor (aparecem como '{SEM_DADOS}'): {', '.join(faltantes)}."
+        )
+    com_pagina = exige_pagina_avisos(avisos)
+    if com_pagina:
+        extras = extras or {}
+        referencia = f"{extras['mes']}/{extras['ano']}" if "mes" in extras and "ano" in extras else ""
+        inserir_pagina_avisos(modelo.docx, avisos, referencia)
 
     caminho_saida = Path(caminho_saida)
     caminho_saida.parent.mkdir(parents=True, exist_ok=True)
@@ -119,22 +206,23 @@ def gerar_relatorio_word(dados, caminho_template, caminho_saida, extras=None, se
         modelo.save(caminho_saida)
     except PermissionError as e:
         raise PermissionError(f"Feche o arquivo se estiver aberto no Word: {caminho_saida}") from e
-    return caminho_saida, sorted(_Faltante.registro)
+    return caminho_saida, faltantes, com_pagina
 
 
 if __name__ == "__main__":
     import sys
 
+    import log_execucao
     from consolidacao import consolidar_e_sanitizar, extrair_por_fonte
 
-    if len(sys.argv) < 3:
-        sys.exit("Uso: python scripts/gerador_relatorio.py MES ANO")
-    mes, ano = sys.argv[1].upper(), sys.argv[2]
-    secoes, auxiliar = extrair_por_fonte(mes, ano)
+    log_execucao.configurar()
+    periodo = periodo_da_cli(sys.argv[1:], "python scripts/gerador_relatorio.py MES [ANO]")
+    secoes, auxiliar = extrair_por_fonte(periodo.mes, periodo.ano)
     dados, _, _ = consolidar_e_sanitizar(secoes, auxiliar["series"])
     template = RAIZ / "templates" / "modelo_relatorio.docx"
-    saida = RAIZ / "relatorios_gerados" / f"Relatorio_{mes.capitalize()}_{ano}_Teste.docx"
-    arquivo, faltantes = gerar_relatorio_word(
-        dados, template, saida, extras={"mes": mes, "ano": ano}, series=auxiliar["series"]
+    saida = RAIZ / "relatorios_gerados" / f"Relatorio_{periodo.mes.capitalize()}_{periodo.ano}_Teste.docx"
+    arquivo, faltantes, _ = gerar_relatorio_word(
+        dados, template, saida, extras={"mes": periodo.mes, "ano": periodo.ano, "n_dias": periodo.n_dias},
+        series=auxiliar["series"],
     )
     print("Relatório salvo em:", arquivo, "| variáveis ausentes:", faltantes)

@@ -11,6 +11,8 @@ Roda DEPOIS da extração e ANTES de validar/gerar o Word. Toda alteração é r
 
 import re
 
+from utils import eh_numero as _num
+
 # Indicadores que são proporções (0–1). Só vale para a linha-título do bloco (sem "__").
 PREFIXOS_PROPORCAO = (
     "taxa_", "incidencia_", "indice_", "adesao_", "pnm_", "atender_100", "fonoaudiologo_",
@@ -46,10 +48,6 @@ PENDENTE_INVALIDO = "[Valor Inválido na Planilha]"
 
 _PACIENTE_DIA = re.compile(r"^n_(total_de_)?(de_)?pacientes?_dia$")
 _LEITO_DIA = re.compile(r"^n_de_leito_dias?$")
-
-
-def _num(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
 def _fmt(v):

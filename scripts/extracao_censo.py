@@ -1,9 +1,10 @@
 """Extração do resumo do Censo (09 CENSO INPUT) para a linha UTI Pediátrica."""
 
-import unicodedata
 from pathlib import Path
 
 import pandas as pd
+
+from utils import normalizar as _normalizar
 
 ABA = "Resumo"
 LINHAS_CABECALHO = (1, 2, 3)  # cabeçalho mesclado: rótulo se espalha por estas linhas
@@ -17,12 +18,6 @@ COLUNAS = {
 }
 
 CHAVES = tuple(COLUNAS)
-
-
-def _normalizar(texto):
-    """Maiúsculas, sem acentos, sem espaços nas pontas e sem espaços duplicados."""
-    sem_acento = unicodedata.normalize("NFKD", str(texto)).encode("ascii", "ignore").decode()
-    return " ".join(sem_acento.upper().split())
 
 
 def extrair_dados_censo(caminho_arquivo):

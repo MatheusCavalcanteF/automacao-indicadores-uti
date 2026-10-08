@@ -1,7 +1,10 @@
 """Localiza as fontes em dados_entrada/, extrai, concilia/sanitiza e consolida os dicionários."""
 
+import hashlib
+from datetime import datetime
 from pathlib import Path
 
+import log_execucao
 from extracao_censo import CHAVES as CHAVES_CENSO, extrair_dados_censo
 from extracao_odt_testes import CHAVES as CHAVES_TESTES, extrair_dados_testes
 from extracao_pdf_fisio import CHAVES as CHAVES_FISIO, extrair_dados_fisio
@@ -13,6 +16,8 @@ RAIZ = Path(__file__).resolve().parent.parent
 ENTRADA = RAIZ / "dados_entrada"
 PENDENTE = "[Sem Dados]"
 
+log = log_execucao.obter(__name__)
+
 # (título da seção, extensão, termos no nome, obrigatória?, variáveis para marcar como pendentes)
 FONTES = [
     ("PRODUÇÃO DIÁRIA", ".xlsx", ["produ"], True, ()),
@@ -20,6 +25,19 @@ FONTES = [
     ("FISIOTERAPIA", ".pdf", ["fisio"], False, CHAVES_FISIO),
     ("TESTES (ORELHINHA / LINGUINHA)", ".odt", ["nascidos", "testes"], False, CHAVES_TESTES),
 ]
+
+
+def _sha256(caminho):
+    """Impressão digital do arquivo de entrada, para a auditoria provar qual versão foi usada."""
+    h = hashlib.sha256()
+    with open(caminho, "rb") as f:
+        for bloco in iter(lambda: f.read(1 << 20), b""):
+            h.update(bloco)
+    return h.hexdigest()
+
+
+def _mtime(caminho):
+    return f"{datetime.fromtimestamp(caminho.stat().st_mtime):%Y-%m-%d %H:%M:%S}"
 
 
 def extrair_por_fonte(mes, ano, pasta_entrada=ENTRADA):
@@ -41,7 +59,8 @@ def extrair_por_fonte(mes, ano, pasta_entrada=ENTRADA):
             arquivo = localizar_arquivo(
                 pasta_entrada, extensao, termos, mes, ano, descricao=titulo, estrito=not obrigatoria
             )
-            print(f"  {titulo}: {arquivo.name}")
+            log.info(f"  {titulo}: {arquivo.name}")
+            log.debug(f"  {titulo}: sha256 {_sha256(arquivo)}; modificado em {_mtime(arquivo)}")
             arquivos[titulo] = arquivo.name
             if titulo == "PRODUÇÃO DIÁRIA":
                 secoes[titulo], auxiliar["series"], auxiliar["titulo_aba"], auxiliar["meta"] = ler_producao(arquivo, mes)
@@ -56,7 +75,7 @@ def extrair_por_fonte(mes, ano, pasta_entrada=ENTRADA):
             if obrigatoria:
                 raise
             motivo = str(e) if titulo in str(e) else f"{titulo}: {e}"
-            print(f"[WARNING] {motivo}\n          Variáveis desta fonte ficam como '{PENDENTE}'.")
+            log.warning(f"[WARNING] {motivo}\n          Variáveis desta fonte ficam como '{PENDENTE}'.")
             arquivos.pop(titulo, None)
             pendencias.append(titulo)
             secoes[titulo] = {chave: PENDENTE for chave in chaves}
@@ -69,7 +88,7 @@ def consolidar(secoes):
     for titulo, dados in secoes.items():
         repetidas = dados_consolidados.keys() & dados.keys()
         if repetidas:
-            print(f"[aviso] '{titulo}' sobrescreve chaves já existentes: {sorted(repetidas)}")
+            log.warning(f"[aviso] '{titulo}' sobrescreve chaves já existentes: {sorted(repetidas)}")
         dados_consolidados.update(dados)
     return dados_consolidados
 

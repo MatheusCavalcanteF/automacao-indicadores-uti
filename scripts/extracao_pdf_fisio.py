@@ -8,10 +8,14 @@ as páginas, três seções pelo título e extrai o número associado a cada uma
 """
 
 import re
-import unicodedata
 from pathlib import Path
 
 import pdfplumber
+
+import log_execucao
+from utils import sem_acento
+
+log = log_execucao.obter(__name__)
 
 CHAVES = ("fisio_taxa_vm_invasiva_total", "fisio_extubacao_nao_programada", "fisio_pav")
 SEM_DADOS = "[Sem Dados]"
@@ -25,9 +29,8 @@ SECOES = (
 
 
 def _normalizar(texto):
-    texto = texto.replace("–", "-").replace("—", "-")  # antes do ascii, que descartaria o travessão
-    sem = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode().upper()
-    return re.sub(r"[ \t]+", " ", sem)
+    """Normalização por linha do PDF: só colapsa espaços/tabs (utils.sem_acento já troca travessão por hífen)."""
+    return re.sub(r"[ \t]+", " ", sem_acento(texto).upper())
 
 
 def _numero(texto):
@@ -91,14 +94,14 @@ def extrair_dados_fisio(caminho_pdf):
     resultado = {}
     for chave, _ in SECOES:
         if chave not in inicios:
-            print(f"[WARNING] Fisioterapia: título do indicador '{chave}' não encontrado em '{caminho.name}'.")
+            log.warning(f"[WARNING] Fisioterapia: título do indicador '{chave}' não encontrado em '{caminho.name}'.")
             resultado[chave] = SEM_DADOS
             continue
         ini = inicios[chave] + 1
         fim = next((i for c, i in ordem if i > inicios[chave]), len(linhas))
         valor = _PARSERS[chave]("\n".join(linhas[ini:fim]))
         if valor is None:
-            print(f"[WARNING] Fisioterapia: valor de '{chave}' não localizado na seção do PDF.")
+            log.warning(f"[WARNING] Fisioterapia: valor de '{chave}' não localizado na seção do PDF.")
         resultado[chave] = SEM_DADOS if valor is None else valor
     return resultado
 
@@ -106,4 +109,5 @@ def extrair_dados_fisio(caminho_pdf):
 if __name__ == "__main__":
     import sys
 
+    log_execucao.configurar()
     print(extrair_dados_fisio(sys.argv[1]))

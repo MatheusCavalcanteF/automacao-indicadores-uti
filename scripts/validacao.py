@@ -4,10 +4,8 @@ Cada problema é uma tupla (nivel, mensagem). Nível "ERRO" = número que não d
 relatório sem revisão; "AVISO" = divergência a conferir.
 """
 
-import calendar
-
-from localizar_arquivos import MESES, resolver_mes, _sem_acento
 from sanitizacao import PREFIXOS_PROPORCAO, RAZOES
+from utils import MESES, eh_numero as _num, resolver_periodo, sem_acento
 
 # Divergência entre fontes que ainda merece conferência humana (Censo x Produção é tratado na sanitização).
 CRUZADOS = [
@@ -16,20 +14,17 @@ CRUZADOS = [
 ]
 
 
-def _num(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
-
-
-def validar(dados, series, titulo_aba, mes, ano):
+def validar(dados, series, titulo_aba, mes, ano, dias_modelo=None):
+    """dias_modelo: maior dia que as tabelas diárias do modelo Word comportam (None = não conferir)."""
     problemas = []
+    periodo = resolver_periodo(mes, ano)
 
     # 1) Aba corresponde ao mês/ano pedidos.
-    mes_chave = resolver_mes(mes)
-    titulo = _sem_acento(titulo_aba).upper()
-    if not any(a in titulo for a in MESES[mes_chave][:2]):
-        problemas.append(("ERRO", f"título da aba ('{titulo_aba.strip()}') não cita {mes_chave}."))
-    if str(ano) not in titulo:
-        problemas.append(("AVISO", f"título da aba não cita o ano {ano}."))
+    titulo = sem_acento(titulo_aba).upper()
+    if not any(a in titulo for a in MESES[periodo.mes][:2]):
+        problemas.append(("ERRO", f"título da aba ('{titulo_aba.strip()}') não cita {periodo.mes}."))
+    if str(periodo.ano) not in titulo:
+        problemas.append(("AVISO", f"título da aba não cita o ano {periodo.ano}."))
 
     # 2) Proporções entre 0 e 1.
     for chave, valor in dados.items():
@@ -59,8 +54,13 @@ def validar(dados, series, titulo_aba, mes, ano):
         if abs(sum(valores) - total) > 0.5:
             problemas.append(("ERRO", f"{chave}: TOTAL {total:g} ≠ soma dos dias {sum(valores):g} (fórmula da planilha?)."))
 
-    # 6) Limitação do modelo: tabelas diárias do Word têm 30 colunas de dia.
-    n_dias = calendar.monthrange(int(ano), list(MESES).index(mes_chave) + 1)[1]
-    if n_dias > 30:
-        problemas.append(("AVISO", f"{mes_chave} tem {n_dias} dias; as tabelas diárias do modelo têm 30 colunas."))
+    # 6) Colunas de dia da aba x dias do mês (aba de outro mês ou coluna faltando/sobrando).
+    dias_aba = max((len(s) for s in series.values()), default=0)
+    if dias_aba and dias_aba != periodo.n_dias:
+        problemas.append(("AVISO", f"a aba tem {dias_aba} colunas de dia; {periodo.mes}/{periodo.ano} tem {periodo.n_dias} dias."))
+
+    # 7) O modelo Word precisa comportar todos os dias do mês (senão o dia 31 some do relatório).
+    if dias_modelo and periodo.n_dias > dias_modelo:
+        problemas.append(("ERRO", f"as tabelas diárias do modelo Word vão só até o dia {dias_modelo}, mas "
+                                  f"{periodo.mes} tem {periodo.n_dias} dias. Rode scripts/montar_template.py."))
     return problemas

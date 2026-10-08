@@ -9,13 +9,18 @@ com números que continuam fixos, para revisão. Rode de novo se o modelo-base m
 
 import re
 import sys
-import unicodedata
+from copy import deepcopy
 from pathlib import Path
 
 from docx import Document
 from docx.enum.text import WD_COLOR_INDEX
+from docx.oxml.ns import qn
 from docx.table import Table
 from docx.text.paragraph import Paragraph
+
+from utils import sem_acento
+
+DIAS_MAX = 31  # colunas de dia das tabelas diárias; meses mais curtos deixam as últimas em branco
 
 RAIZ = Path(__file__).resolve().parent.parent
 BASE = RAIZ / "templates" / "junho_convertido.docx"
@@ -183,8 +188,7 @@ PLACEHOLDER_JUSTIFICATIVA = "[PREENCHER: justificativa / análise do indicador]"
 
 
 def _compacto(texto):
-    sem = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode()
-    return re.sub(r"[^A-Z0-9]", "", sem.upper())
+    return re.sub(r"[^A-Z0-9]", "", sem_acento(texto).upper())
 
 
 def _set_par(p, texto, destaque=False):
@@ -208,6 +212,60 @@ def _set_cell(cell, texto):
 
 def _remover(el):
     el.getparent().remove(el)
+
+
+def _largura(el):
+    """Largura em dxa de um <w:gridCol> ou <w:tc> (None se ausente ou em outra unidade)."""
+    if el.tag == qn("w:gridCol"):
+        return int(el.get(qn("w:w"))) if el.get(qn("w:w")) else None
+    tcw = el.tcPr.find(qn("w:tcW")) if el.tcPr is not None else None
+    if tcw is None or tcw.get(qn("w:type"), "dxa") != "dxa" or not tcw.get(qn("w:w")):
+        return None
+    return int(tcw.get(qn("w:w")))
+
+
+def _ajustar_largura(el, delta):
+    atual = _largura(el)
+    if atual is None:
+        return
+    alvo = el if el.tag == qn("w:gridCol") else el.tcPr.find(qn("w:tcW"))
+    alvo.set(qn("w:w"), str(max(atual + delta, 0)))
+
+
+def garantir_colunas_de_dia(tabela, dias=DIAS_MAX):
+    """Tabela diária (rótulo | dia 1..N | TOTAL | taxa) com N < `dias` ganha as colunas que faltam.
+
+    Cada coluna nova é cópia vazia da última coluna de dia, inserida logo antes de TOTAL. A largura
+    sai da coluna do rótulo, para a tabela não crescer. Célula mesclada que cobre a última coluna de
+    dia (título da tabela) ganha +1 no gridSpan. Idempotente: com `dias` colunas, nada muda.
+    Retorna quantas colunas foram adicionadas.
+    """
+    tbl = tabela._tbl
+    adicionadas = 0
+    while len(tbl.tblGrid.gridCol_lst) - 3 < dias:
+        cols = tbl.tblGrid.gridCol_lst
+        pos = len(cols) - 2  # índice de grade da coluna nova (= posição atual de TOTAL)
+        ultima_dia = cols[pos - 1]
+        largura = _largura(ultima_dia) or 0
+        ultima_dia.addnext(deepcopy(ultima_dia))
+        _ajustar_largura(cols[0], -largura)
+        for tr in tbl.tr_lst:
+            inicio = 0
+            for tc in list(tr.tc_lst):
+                span = tc.grid_span
+                fim = inicio + span  # exclusivo
+                if span == 1 and inicio == pos - 1:  # última célula de dia: duplica, vazia
+                    nova = deepcopy(tc)
+                    for t in nova.iter(qn("w:t")):
+                        t.text = ""
+                    tc.addnext(nova)
+                elif span > 1 and inicio < pos <= fim:  # mesclada sobre a última coluna de dia
+                    tc.grid_span = span + 1
+                elif inicio == 0 and span == 1:  # rótulo: cede a largura da coluna nova
+                    _ajustar_largura(tc, -largura)
+                inicio = fim
+        adicionadas += 1
+    return adicionadas
 
 
 def montar(base=BASE, saida=SAIDA):
@@ -266,6 +324,8 @@ def montar(base=BASE, saida=SAIDA):
             continue
         tabela = Table(el, doc)
         if len(tabela.columns) >= 33:
+            if garantir_colunas_de_dia(tabela):  # o modelo-base (junho) tem 30 dias; o relatório precisa de 31
+                print(f"[info] tabela diária ampliada para {DIAS_MAX} colunas de dia.")
             diaria_cronicos = False
             for r in tabela.rows[1:]:
                 chave = LINHAS_DIARIAS.get(_compacto(r.cells[0].text))

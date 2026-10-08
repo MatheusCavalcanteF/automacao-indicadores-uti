@@ -1,53 +1,27 @@
 """Extração dos totais mensais da PLANILHA INDICADORES PRODUÇÃO DIÁRIA."""
 
 import re
-import unicodedata
 from pathlib import Path
 
 import pandas as pd
 
-MESES = {
-    1: ("JANEIRO", "JAN"),
-    2: ("FEVEREIRO", "FEV"),
-    3: ("MARCO", "MAR"),
-    4: ("ABRIL", "ABR"),
-    5: ("MAIO", "MAI"),
-    6: ("JUNHO", "JUN"),
-    7: ("JULHO", "JUL"),
-    8: ("AGOSTO", "AGO"),
-    9: ("SETEMBRO", "SET"),
-    10: ("OUTUBRO", "OUT"),
-    11: ("NOVEMBRO", "NOV"),
-    12: ("DEZEMBRO", "DEZ"),
-}
+from utils import MESES, normalizar as _normalizar, periodo_da_cli, resolver_mes, sem_acento
 
 LINHA_CABECALHO = "DATAS"
 COLUNA_TOTAL = "TOTAL"
 COLUNA_REALIZADO = "REALIZADO"  # taxas/médias trazem o valor aqui; em TOTAL vem o texto "TOTAL"
 
 
-def _normalizar(texto):
-    """Maiúsculas, sem acentos, sem espaços nas pontas e sem espaços duplicados."""
-    sem_acento = unicodedata.normalize("NFKD", str(texto)).encode("ascii", "ignore").decode()
-    return " ".join(sem_acento.upper().split())
-
-
 def chave_variavel(texto):
     """'N. DE SAÍDAS' -> 'n_de_saidas' (variável Jinja válida). Chaves já normalizadas passam intactas."""
     if re.fullmatch(r"[a-z0-9_]+", str(texto)):
         return str(texto)
-    sem_acento = unicodedata.normalize("NFKD", str(texto)).encode("ascii", "ignore").decode()
-    return re.sub(r"[^a-z0-9]+", "_", sem_acento.lower()).strip("_")
+    return re.sub(r"[^a-z0-9]+", "_", sem_acento(texto).lower()).strip("_")
 
 
 def _encontrar_aba(abas, mes_referencia):
     """Retorna o nome da aba que corresponde ao mês (nome completo ou abreviação)."""
-    mes = _normalizar(mes_referencia)
-    candidatos = {mes}
-    for completo, abrev in MESES.values():
-        if mes in (completo, abrev):
-            candidatos = {completo, abrev}
-            break
+    candidatos = set(MESES[resolver_mes(mes_referencia)][:2])
 
     # Prioriza o nome completo; só depois a abreviação (como palavra inteira).
     # Abas "PREENCHIMENTO GESTORA - SET" também casam: as "UTI PEDIATRICA" têm preferência.
@@ -156,5 +130,8 @@ def extrair_dados_diarios(caminho_arquivo, mes_referencia):
 if __name__ == "__main__":
     import sys
 
-    totais, series, titulo, _ = ler_producao(sys.argv[1], sys.argv[2])
+    if len(sys.argv) < 3:
+        sys.exit("Uso: python scripts/extracao_producao.py PLANILHA.xlsx MES")
+    periodo = periodo_da_cli(sys.argv[2:3], "python scripts/extracao_producao.py PLANILHA.xlsx MES")
+    totais, series, titulo, _ = ler_producao(sys.argv[1], periodo.mes)
     print(f"Foram extraídos {len(totais)} indicadores; título da aba: {titulo!r}")

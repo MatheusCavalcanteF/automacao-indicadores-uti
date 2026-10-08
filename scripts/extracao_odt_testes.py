@@ -1,6 +1,5 @@
 """Extração da tabela de testes (Orelhinha/Linguinha) do ODT de Nascidos Vivos. Ignora texto livre."""
 
-import unicodedata
 from pathlib import Path
 
 from odf import teletype
@@ -8,6 +7,7 @@ from odf.opendocument import load
 from odf.table import Table, TableCell, TableRow
 
 from extracao_producao import chave_variavel
+from utils import normalizar as _normalizar
 
 LINHA_ALVO = "MATERNIDADE"  # padrão histórico dos relatórios
 COLUNAS = {"teste_orelhinha": "TESTE ORELHINHA", "teste_linguinha": "TESTE LINGUINHA"}
@@ -18,11 +18,6 @@ CHAVES = tuple(COLUNAS) + tuple(f"{c}_{s}" for c in COLUNAS for s in SETORES)
 
 def _texto(no):
     return " ".join(teletype.extractText(no).split())
-
-
-def _normalizar(texto):
-    sem_acento = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode()
-    return sem_acento.upper().strip()
 
 
 def _linhas_da_tabela(tabela):

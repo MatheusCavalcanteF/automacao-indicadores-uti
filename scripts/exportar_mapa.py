@@ -3,7 +3,9 @@
 import sys
 from pathlib import Path
 
-from consolidacao import RAIZ, consolidar, extrair_por_fonte
+import log_execucao
+from consolidacao import RAIZ, extrair_por_fonte
+from utils import periodo_da_cli
 
 
 def exportar_mapa(secoes, caminho_saida, extras=None):
@@ -36,10 +38,9 @@ def exportar_mapa(secoes, caminho_saida, extras=None):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        sys.exit("Uso: python scripts/exportar_mapa.py MES ANO")
-    mes, ano = sys.argv[1].upper(), sys.argv[2]
-    secoes, _ = extrair_por_fonte(mes, ano)
+    log_execucao.configurar()
+    periodo = periodo_da_cli(sys.argv[1:], "python scripts/exportar_mapa.py MES [ANO]")
+    secoes, _ = extrair_por_fonte(periodo.mes, periodo.ano)
     destino = RAIZ / "mapa_variaveis.txt"
-    n = exportar_mapa(secoes, destino, extras={"mes": mes, "ano": ano})
+    n = exportar_mapa(secoes, destino, extras={"mes": periodo.mes, "ano": periodo.ano, "n_dias": periodo.n_dias})
     print(f"{n} variáveis gravadas em {destino}")

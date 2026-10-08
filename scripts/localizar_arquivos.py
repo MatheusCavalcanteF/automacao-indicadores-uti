@@ -1,47 +1,23 @@
 """Localiza arquivos de entrada por extensão, termo base e mês/ano no nome (mtime só como fallback)."""
 
 import re
+import sys
 import tempfile
-import unicodedata
 from pathlib import Path
 
-# Nome completo (sem acento) -> apelidos aceitos no nome do arquivo.
-MESES = {
-    "JANEIRO": ["JANEIRO", "JAN", "01"],
-    "FEVEREIRO": ["FEVEREIRO", "FEV", "02"],
-    "MARCO": ["MARCO", "MAR", "03"],
-    "ABRIL": ["ABRIL", "ABR", "04"],
-    "MAIO": ["MAIO", "MAI", "05"],
-    "JUNHO": ["JUNHO", "JUN", "06"],
-    "JULHO": ["JULHO", "JUL", "07"],
-    "AGOSTO": ["AGOSTO", "AGO", "08"],
-    "SETEMBRO": ["SETEMBRO", "SET", "09"],
-    "OUTUBRO": ["OUTUBRO", "OUT", "10"],
-    "NOVEMBRO": ["NOVEMBRO", "NOV", "11"],
-    "DEZEMBRO": ["DEZEMBRO", "DEZ", "12"],
-}
+import log_execucao
+from utils import MESES, SUFIXO_CORRIGIDA, periodo_da_cli, resolver_mes, sem_acento
+
+log = log_execucao.obter(__name__)
 
 
 class ArquivoAmbiguoError(Exception):
     """Arquivo só pôde ser escolhido por data do sistema, em modo estrito."""
 
 
-def _sem_acento(texto):
-    return unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode()
-
-
 def _tokens(nome):
     """'Fisio PED AGOSTO26 (2).pdf' -> ['FISIO','PED','AGOSTO','26','2','PDF']."""
-    return re.findall(r"[A-Z]+|\d+", _sem_acento(nome).upper())
-
-
-def resolver_mes(mes):
-    """Aceita 'SETEMBRO', 'set', 'Setembro' ou '9'/'09' e devolve a chave de MESES."""
-    alvo = _sem_acento(str(mes)).upper().strip()
-    for chave, apelidos in MESES.items():
-        if alvo == chave or alvo in apelidos or (alvo.isdigit() and int(alvo) == int(apelidos[2])):
-            return chave
-    raise ValueError(f"Mês inválido: {mes!r}")
+    return re.findall(r"[A-Z]+|\d+", sem_acento(nome).upper())
 
 
 def _anos(ano):
@@ -79,7 +55,7 @@ def localizar_arquivo(pasta, extensao, termos, mes, ano, descricao=None, estrito
 
     mes_chave = resolver_mes(mes)
     anos = _anos(ano)
-    termos_norm = [_sem_acento(t).lower() for t in termos]
+    termos_norm = [sem_acento(t).lower() for t in termos]
     rotulo = descricao or "/".join(termos)
 
     candidatos = [
@@ -87,8 +63,8 @@ def localizar_arquivo(pasta, extensao, termos, mes, ano, descricao=None, estrito
         if f.is_file()
         and f.suffix.lower() == extensao.lower()
         and not f.name.startswith(("~$", ".~lock"))
-        and not f.stem.endswith("_Corrigida")  # saída do write-back; a fonte é sempre o original
-        and any(t in _sem_acento(f.name).lower() for t in termos_norm)
+        and SUFIXO_CORRIGIDA.lower() not in f.stem.lower()  # saída do write-back; a fonte é sempre o original
+        and any(t in sem_acento(f.name).lower() for t in termos_norm)
     ]
     if not candidatos:
         raise FileNotFoundError(
@@ -106,13 +82,13 @@ def localizar_arquivo(pasta, extensao, termos, mes, ano, descricao=None, estrito
         # Mês+ano > só mês; empate resolvido por mtime, apenas para ser determinístico.
         escolhido = max(com_mes, key=lambda f: (info[f][1], f.stat().st_mtime))
         if len(com_mes) > 1:
-            print(f"[aviso] {len(com_mes)} arquivos de {mes_chave} para {rotulo}; usando '{escolhido.name}'.")
+            log.warning(f"[aviso] {len(com_mes)} arquivos de {mes_chave} para {rotulo}; usando '{escolhido.name}'.")
         return escolhido
 
     escolhido = max(candidatos, key=lambda f: f.stat().st_mtime)
     outros = sorted(info[escolhido][2])
     if len(candidatos) == 1 and not outros:
-        print(f"[info] {rotulo}: '{escolhido.name}' não cita mês no nome (arquivo único, provavelmente anual).")
+        log.info(f"[info] {rotulo}: '{escolhido.name}' não cita mês no nome (arquivo único, provavelmente anual).")
     else:
         detalhe = f" O nome indica {', '.join(outros)}." if outros else ""
         if estrito:
@@ -120,8 +96,8 @@ def localizar_arquivo(pasta, extensao, termos, mes, ano, descricao=None, estrito
                 f"{rotulo}: nenhum arquivo de {mes_chave} em {pasta}. O mais recente seria "
                 f"'{escolhido.name}'.{detalhe}."
             )
-        print(f"AVISO: Arquivo {escolhido.name} selecionado por data do sistema, "
-              f"confira se o mês está correto (esperado: {mes_chave}).{detalhe}")
+        log.warning(f"AVISO: Arquivo {escolhido.name} selecionado por data do sistema, "
+                    f"confira se o mês está correto (esperado: {mes_chave}).{detalhe}")
     return escolhido
 
 
@@ -151,8 +127,11 @@ def _testar():
 
 
 if __name__ == "__main__":
+    log_execucao.configurar()
     _testar()
-    print("--- pasta real ---")
-    pasta = Path(__file__).resolve().parent.parent / "dados_entrada"
-    for ext, termos in ((".pdf", ["fisio"]), (".odt", ["nascidos", "testes"])):
-        print(localizar_arquivo(pasta, ext, termos, "SETEMBRO", 2026).name)
+    if len(sys.argv) > 1:
+        periodo = periodo_da_cli(sys.argv[1:], "python scripts/localizar_arquivos.py [MES [ANO]]")
+        print(f"--- pasta real ({periodo.mes}/{periodo.ano}) ---")
+        pasta = Path(__file__).resolve().parent.parent / "dados_entrada"
+        for ext, termos in ((".pdf", ["fisio"]), (".odt", ["nascidos", "testes"])):
+            print(localizar_arquivo(pasta, ext, termos, periodo.mes, periodo.ano).name)
