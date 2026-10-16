@@ -73,7 +73,23 @@ def _t(base, chave):
     return _v(f"{base}__{chave}")
 
 
+_NUMERO = re.compile(r"\d+(?:[.,]\d+)*")
+
+
+def _so_o_numero(chave):
+    """Texto novo = o do documento-base com só o primeiro número trocado pela variável.
+
+    Para frases cujo resto (ex.: o nome da unidade) deve vir do .docx base, não do código.
+    Sem número no parágrafo, devolve None e o parágrafo fica como está (e entra no aviso).
+    """
+    def trocar(texto):
+        novo, n = _NUMERO.subn(lambda _: _v(chave), texto, count=1)
+        return novo if n else None
+    return trocar
+
+
 # Parágrafos de base de cálculo: (início do texto original, [textos novos em ordem de aparição]).
+# Cada texto novo é uma string fixa ou uma função texto_original -> texto novo (ver _so_o_numero).
 PARAGRAFOS = [
     ("Para base de cálculo da taxa de ocupação", [
         "Para base de cálculo da taxa de ocupação consideramos o quantitativo de "
@@ -169,7 +185,7 @@ PARAGRAFOS = [
         "Nº de recém-nascidos que foram testados/ nº nascidos vivos – "
         + _t("fonoaudiologo_teste_linguinha_em_100_dos_nascidos", "n_de_recem_nascidos_que_foram_testados")
         + " RN testados /" + _t("fonoaudiologo_teste_linguinha_em_100_dos_nascidos", "n_de_nascidos_vivos")]),
-    ("Tivemos um total de", ["Tivemos um total de " + _v("n_de_nascidos_vivos") + " nascidos vivos no HX."]),
+    ("Tivemos um total de", [_so_o_numero("n_de_nascidos_vivos")]),
     ("Taxa de Utilização de VM total", [
         "Taxa de Utilização de VM total: Considerando os números globais, tivemos uma taxa de "
         + _v(VM, "pct(1)") + ". [PREENCHER: taxa excluindo pacientes crônicos e análise]"]),
@@ -288,7 +304,11 @@ def montar(base=BASE, saida=SAIDA):
         texto = p.text.strip()
         for inicio, novos in PARAGRAFOS:
             if texto.startswith(inicio) and contadores[inicio] < len(novos):
-                _set_par(p, novos[contadores[inicio]])
+                novo = novos[contadores[inicio]]
+                novo = novo(texto) if callable(novo) else novo
+                if novo is None:
+                    break
+                _set_par(p, novo)
                 contadores[inicio] += 1
                 protegidos.add(el)
                 break
