@@ -4,6 +4,9 @@ relatorios_gerados/*
 mapa_variaveis.txt
 # Modelos Word: o junho_convertido.docx contém nomes de pacientes; o modelo é gerado por scripts/montar_template.py
 templates/*
+# Exemplo: tudo é gerado por scripts/gerar_dados_exemplo.py e pelo main.py; só o gerador é versionado
+exemplo/dados_entrada/*
+exemplo/relatorios_gerados/*
 !*/.gitkeep
 __pycache__/
 *.pyc
