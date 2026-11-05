@@ -23,7 +23,7 @@ from utils import sem_acento
 DIAS_MAX = 31  # colunas de dia das tabelas diárias; meses mais curtos deixam as últimas em branco
 
 RAIZ = Path(__file__).resolve().parent.parent
-BASE = RAIZ / "templates" / "junho_convertido.docx"
+BASE = RAIZ / "templates" / "setembro_convertido.docx"
 SAIDA = RAIZ / "templates" / "modelo_relatorio.docx"
 
 _MES_ANO = re.compile(r"(JANEIRO|FEVEREIRO|MAR[ÇC]O|ABRIL|MAIO|JUNHO|JULHO|AGOSTO|SETEMBRO|OUTUBRO|NOVEMBRO|DEZEMBRO)/(\d{4})")
@@ -248,6 +248,26 @@ def _ajustar_largura(el, delta):
     alvo.set(qn("w:w"), str(max(atual + delta, 0)))
 
 
+def remover_coluna_final_vazia(tabela):
+    """Remove a coluna sobrando à direita da taxa, para TOTAL e taxa serem as duas últimas.
+
+    Só age se a última célula de todas as linhas for simples e vazia. Retorna True se removeu.
+    """
+    tbl = tabela._tbl
+    ultimas = [tr.tc_lst[-1] for tr in tbl.tr_lst]
+    if any(tc.grid_span != 1 or "".join(t.text or "" for t in tc.iter(qn("w:t"))).strip() for tc in ultimas):
+        return False
+    grade = tbl.tblGrid.gridCol_lst
+    largura = _largura(grade[-1]) or 0
+    _remover(grade[-1])
+    _ajustar_largura(grade[0], largura)  # o rótulo recebe a largura, para a tabela não encolher
+    for tr, tc in zip(tbl.tr_lst, ultimas):
+        _remover(tc)
+        if tr.tc_lst[0].grid_span == 1:
+            _ajustar_largura(tr.tc_lst[0], largura)
+    return True
+
+
 def garantir_colunas_de_dia(tabela, dias=DIAS_MAX):
     """Tabela diária (rótulo | dia 1..N | TOTAL | taxa) com N < `dias` ganha as colunas que faltam.
 
@@ -284,8 +304,29 @@ def garantir_colunas_de_dia(tabela, dias=DIAS_MAX):
     return adicionadas
 
 
+def remover_entradas_sumario_sem_destino(doc):
+    """Tira do sumário as linhas que apontam para título apagado (viram 'Error! Bookmark' ao imprimir).
+
+    Mantém a linha que abre ou fecha o campo do sumário, para não quebrar os demais itens.
+    Retorna quantas linhas removeu.
+    """
+    corpo = doc.element.body
+    destinos = {b.get(qn("w:name")) for b in corpo.iter(qn("w:bookmarkStart"))}
+    removidas = 0
+    for p in list(corpo.iterchildren(qn("w:p"))):
+        instrucoes = " ".join(i.text or "" for i in p.iter(qn("w:instrText")))
+        alvo = re.search(r"PAGEREF\s+(\S+)", instrucoes)
+        tipos = [f.get(qn("w:fldCharType")) for f in p.iter(qn("w:fldChar"))]
+        if alvo and alvo.group(1) not in destinos and tipos.count("begin") == tipos.count("end"):
+            _remover(p)
+            removidas += 1
+    return removidas
+
+
 def montar(base=BASE, saida=SAIDA):
     doc = Document(base)
+    if removidas := remover_entradas_sumario_sem_destino(doc):
+        print(f"[info] {removidas} linha(s) do sumário sem destino removida(s).")
     elementos = list(doc.element.body.iterchildren())
     protegidos = set()
 
@@ -301,7 +342,7 @@ def montar(base=BASE, saida=SAIDA):
         if not el.tag.endswith("}p"):
             continue
         p = Paragraph(el, doc)
-        texto = p.text.strip()
+        texto = p.text.strip().lstrip("- ")  # alguns relatórios abrem a frase com "- "
         for inicio, novos in PARAGRAFOS:
             if texto.startswith(inicio) and contadores[inicio] < len(novos):
                 novo = novos[contadores[inicio]]
@@ -344,10 +385,11 @@ def montar(base=BASE, saida=SAIDA):
             continue
         tabela = Table(el, doc)
         if len(tabela.columns) >= 33:
-            if garantir_colunas_de_dia(tabela):  # o modelo-base (junho) tem 30 dias; o relatório precisa de 31
+            remover_coluna_final_vazia(tabela)
+            if garantir_colunas_de_dia(tabela):  # base de mês com 30 dias; o relatório precisa de 31
                 print(f"[info] tabela diária ampliada para {DIAS_MAX} colunas de dia.")
             diaria_cronicos = False
-            for r in tabela.rows[1:]:
+            for r in tabela.rows:  # a tabela de crônicos pode não ter linha de título
                 chave = LINHAS_DIARIAS.get(_compacto(r.cells[0].text))
                 if not chave:
                     continue

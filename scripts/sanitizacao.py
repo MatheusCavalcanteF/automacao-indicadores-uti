@@ -45,6 +45,7 @@ RECALCULO_ESPECIAL = {
 }
 
 PENDENTE_INVALIDO = "[Valor Inválido na Planilha]"
+SEM_DADOS = "[Sem Dados]"
 
 _PACIENTE_DIA = re.compile(r"^n_(total_de_)?(de_)?pacientes?_dia$")
 _LEITO_DIA = re.compile(r"^n_de_leito_dias?$")
@@ -61,6 +62,23 @@ def _conciliar_censo(dados, log):
             log.append(("INFO", f"Censo x Produção divergem em {censo} (censo={_fmt(dados[censo])}, "
                                 f"produção={_fmt(dados[producao])}); adotado o valor da Produção."))
             dados[censo] = dados[producao]
+
+
+def _marcar_blocos_nao_preenchidos(dados, log, series):
+    """Bloco cujas linhas têm todos os dias vazios não foi medido: o TOTAL 0 da fórmula não é um zero real."""
+    def vazia(chave):
+        dias = (series or {}).get(chave)
+        return bool(dias) and all(v is None for v in dias) and dados.get(chave) == 0
+
+    blocos = {chave.partition("__")[0] for chave in dados if "__" in chave}
+    for bloco in sorted(blocos):
+        filhos = [k for k in dados if k.startswith(bloco + "__")]
+        if not all(vazia(k) for k in filhos):
+            continue
+        for chave in filhos + [bloco]:
+            if chave in dados:
+                dados[chave] = SEM_DADOS
+        log.append(("WARNING", f"{bloco}: nenhum dia preenchido na planilha; marcado como '{SEM_DADOS}' em vez de 0."))
 
 
 def _fonte_do_filho(chave, dados):
@@ -145,6 +163,7 @@ def sanitizar(dados, series=None):
     """Devolve (dados corrigidos, log, correções estruturadas). Não altera o dicionário recebido."""
     dados, log, correcoes = dict(dados), [], []
     _conciliar_censo(dados, log)
+    _marcar_blocos_nao_preenchidos(dados, log, series)
     _corrigir_filhos(dados, log, correcoes, series)
     _recalcular_razoes(dados, log, correcoes)
     _normalizar_proporcoes(dados, log, correcoes)
