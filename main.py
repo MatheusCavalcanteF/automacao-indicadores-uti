@@ -43,6 +43,7 @@ from gerador_relatorio import (  # noqa: E402
     dias_no_modelo,
     gerar_relatorio_word,
 )
+from graficos import aviso_modelo_sem_marcadores, historico_anual  # noqa: E402
 from utils import resolver_periodo  # noqa: E402
 from validacao import validar  # noqa: E402
 
@@ -79,6 +80,19 @@ def _corrigir_excel(auxiliar, correcoes, mes, avisos):
         avisos["PENDENCIA"].append(f"Planilha: corrigir à mão {p['celula']} ({p['chave']}) — {p['motivo']}")
     if destino:
         log.info(f"[EXCEL] Planilha de Produção recalculada e salva com correções: {destino.name}")
+
+
+def _preparar_graficos(auxiliar, periodo, dados, avisos):
+    """Série anual dos gráficos. Falha aqui não impede o relatório, mas é crítica: o gráfico sai indisponível."""
+    if motivo := aviso_modelo_sem_marcadores(TEMPLATE):
+        log.error(f"[ERRO] {motivo}")
+        avisos["CRITICO"].append(motivo)
+    try:
+        return historico_anual(auxiliar["arquivo_producao"], periodo, dados)
+    except Exception as e:  # noqa: BLE001 - os outros números do relatório continuam válidos
+        log.error(f"[ERRO] Gráficos não gerados: {e}")
+        avisos["CRITICO"].append(f"Gráficos não gerados (aparecem como 'Gráfico indisponível'): {e}")
+        return None
 
 
 def _ler_periodo(ap, args):
@@ -134,6 +148,8 @@ def _executar(args, periodo):
         log.log(NIVEIS.get(nivel, logging.WARNING), f"[{nivel}] {msg}")
         avisos["CRITICO" if nivel == "ERRO" else "CONFERIR"].append(msg)
 
+    graficos = _preparar_graficos(auxiliar, periodo, dados, avisos)
+
     if args.estrito and any(avisos[c] for c in BLOQUEIAM_NO_ESTRITO):
         log.error("\n[ESTRITO] Relatório NÃO gerado. Resolva os itens abaixo e rode de novo:")
         for categoria in BLOQUEIAM_NO_ESTRITO:
@@ -143,7 +159,7 @@ def _executar(args, periodo):
 
     saida = args.pasta_saida / f"Relatorio_{mes.capitalize()}_{ano}_Final.docx"
     arquivo, faltantes, com_pagina = gerar_relatorio_word(
-        dados, TEMPLATE, saida, extras=extras, series=auxiliar["series"], avisos=avisos
+        dados, TEMPLATE, saida, extras=extras, series=auxiliar["series"], avisos=avisos, graficos=graficos
     )
     log.info(f"Relatório salvo em: {arquivo}")
     if faltantes:

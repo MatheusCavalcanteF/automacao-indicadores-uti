@@ -54,18 +54,36 @@ def ler_producao(caminho_arquivo, mes_referencia):
     meta: {"aba": nome da aba, "col_rotulo": coluna do rótulo (1 = A), "celulas": {chave: {linha, col_valor,
         col_ini, col_fim, rotulo}}} — onde cada indicador mora no Excel, para corrigir a planilha.
     """
+    with _abrir_planilha(caminho_arquivo) as planilha:
+        return _ler_aba(planilha, mes_referencia)
+
+
+def ler_meses(caminho_arquivo, meses):
+    """{mês: (totais, series)} de vários meses, abrindo o arquivo uma vez só. Aba ausente ou ilegível fica de fora."""
+    lidos = {}
+    with _abrir_planilha(caminho_arquivo) as planilha:
+        for mes in meses:
+            try:
+                totais, series, _, _ = _ler_aba(planilha, mes)
+            except ValueError:
+                continue
+            lidos[mes] = (totais, series)
+    return lidos
+
+
+def _abrir_planilha(caminho_arquivo):
     caminho = Path(caminho_arquivo)
     if not caminho.is_file():
         raise FileNotFoundError(f"Arquivo não encontrado: {caminho}")
-
     try:
-        planilha = pd.ExcelFile(caminho, engine="openpyxl")
+        return pd.ExcelFile(caminho, engine="openpyxl")
     except Exception as e:
         raise ValueError(f"Não foi possível abrir '{caminho.name}': {e}") from e
 
-    with planilha:
-        aba = _encontrar_aba(planilha.sheet_names, mes_referencia)
-        bruto = planilha.parse(aba, header=None)
+
+def _ler_aba(planilha, mes_referencia):
+    aba = _encontrar_aba(planilha.sheet_names, mes_referencia)
+    bruto = planilha.parse(aba, header=None)
 
     # Cabeçalhos mesclados e linhas em branco: acha a linha 'DATAS' em vez de fixar o skiprows.
     lin_cab, col_rotulo = _localizar_cabecalho(bruto)

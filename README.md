@@ -39,7 +39,8 @@ flowchart LR
 | Write-back | `scripts/corrigir_planilha.py` | Grava as fórmulas corrigidas numa cópia da planilha com um patch no XML da célula, preservando gráficos e desenhos. |
 | Validação | `scripts/validacao.py` | Confere se a aba é do mês certo, se as proporções estão entre 0 e 1, se TOTAL bate com a soma dos dias e se as fontes concordam entre si. |
 | Relatório | `scripts/gerador_relatorio.py` | Preenche o modelo Word com filtros Jinja (`pct`, `dec`, `num`, `dia`). |
-| Modelo | `scripts/montar_template.py` | Converte o relatório de um mês anterior no modelo docxtpl: números viram variáveis e análises e listas nominais viram `[PREENCHER]`. |
+| Gráficos | `scripts/graficos.py` | Desenha os gráficos anuais a partir das abas mensais, de janeiro ao mês de referência, e troca as imagens do Word. |
+| Modelo | `scripts/montar_template.py` | Converte o relatório de um mês anterior no modelo docxtpl: números viram variáveis, análises e listas nominais viram `[PREENCHER]` e cada imagem de gráfico é marcada com o indicador e a meta da tabela logo antes dela. |
 
 ## Decisões de engenharia
 
@@ -47,6 +48,7 @@ flowchart LR
 - **O original nunca é alterado.** As correções vão para `<nome>_Corrigida_<MÊS>.xlsx`, com o mês no nome para que rodar outro mês não apague a cópia de auditoria anterior. A cópia corrigida nunca é lida como fonte.
 - **Escrita atômica.** A cópia é gravada num `.tmp` e só então renomeada, para que uma falha no meio não deixe uma planilha corrompida.
 - **`[Sem Dados]` em vez de falhar.** Só a Produção é obrigatória. Fonte ausente, ou existente só de outro mês, não interrompe nada: as variáveis dela saem como `[Sem Dados]` e o Word abre com uma página "AVISOS CRÍTICOS E PENDÊNCIAS". Valor inválido que não dá para recalcular vira `[Valor Inválido na Planilha]`, nunca um chute.
+- **Gráfico vem das abas mensais, não do fechamento anual.** A aba `FECHAMENTO COMPILADO ANUAL` tem `#REF!` e colunas apontando para o mês errado. Cada mês passa pela mesma sanitização do relatório, então a barra do mês bate com a tabela. Mês sem dado válido sai como `s/d`, nunca como 0, e é listado na página de avisos. Modelo sem os marcadores dos gráficos gera erro crítico, para um relatório não sair com os gráficos de outro mês.
 - **`--estrito` para quando o relatório vai direto para frente.** Com ele, erro crítico ou fonte ausente impede a geração do Word.
 - **Códigos de saída** para uso em script ou agendador:
 
@@ -111,6 +113,7 @@ Os testes usam só dados sintéticos criados em pasta temporária:
 
 - sanitização, write-back e escrita atômica;
 - página de avisos e dias 29 a 31 nas tabelas diárias;
+- gráficos anuais: valores por aba mensal, desenho e troca da imagem no Word;
 - interpretação de mês e ano;
 - log de auditoria;
 - execução ponta a ponta com os dados fictícios, incluindo `--estrito` e falta da planilha de Produção.

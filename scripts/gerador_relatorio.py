@@ -23,6 +23,7 @@ from docx.shared import Pt, RGBColor
 from docxtpl import DocxTemplate
 
 from extracao_producao import chave_variavel
+from graficos import historico_anual, substituir_graficos
 from utils import eh_numero as _numerico, periodo_da_cli
 
 RAIZ = Path(__file__).resolve().parent.parent
@@ -170,11 +171,13 @@ def inserir_pagina_avisos(doc, avisos, referencia=""):
         corpo.insert(i, p._p)  # add_paragraph anexou no fim; move para o topo, na ordem
 
 
-def gerar_relatorio_word(dados, caminho_template, caminho_saida, extras=None, series=None, avisos=None):
+def gerar_relatorio_word(dados, caminho_template, caminho_saida, extras=None, series=None, avisos=None, graficos=None):
     """Renderiza o template e salva em caminho_saida.
 
     avisos: {categoria: [mensagens]} (ver SECOES_AVISOS). As variáveis do modelo sem valor entram como
     PENDENCIA; se houver CRITICO, FONTE ou PENDENCIA, a página de avisos é inserida no início.
+    graficos: HistoricoAnual para as imagens marcadas no modelo (ver graficos.py). Sem ele, elas saem como
+    "Gráfico indisponível", nunca com o gráfico do documento-base.
     Retorna (Path salvo, variáveis faltantes, página de avisos inserida?).
     """
     caminho_template = Path(caminho_template)
@@ -194,6 +197,9 @@ def gerar_relatorio_word(dados, caminho_template, caminho_saida, extras=None, se
         avisos.setdefault("PENDENCIA", []).append(
             f"{len(faltantes)} variável(is) do modelo sem valor (aparecem como '{SEM_DADOS}'): {', '.join(faltantes)}."
         )
+    avisos_graficos = substituir_graficos(modelo.docx, graficos)
+    if avisos_graficos:
+        avisos.setdefault("CONFERIR", []).extend(avisos_graficos)
     com_pagina = exige_pagina_avisos(avisos)
     if com_pagina:
         extras = extras or {}
@@ -223,6 +229,6 @@ if __name__ == "__main__":
     saida = RAIZ / "relatorios_gerados" / f"Relatorio_{periodo.mes.capitalize()}_{periodo.ano}_Teste.docx"
     arquivo, faltantes, _ = gerar_relatorio_word(
         dados, template, saida, extras={"mes": periodo.mes, "ano": periodo.ano, "n_dias": periodo.n_dias},
-        series=auxiliar["series"],
+        series=auxiliar["series"], graficos=historico_anual(auxiliar["arquivo_producao"], periodo, dados),
     )
     print("Relatório salvo em:", arquivo, "| variáveis ausentes:", faltantes)
