@@ -28,7 +28,7 @@ RAIZ = Path(__file__).resolve().parent.parent
 BASE = RAIZ / "templates" / "setembro_convertido.docx"
 SAIDA = RAIZ / "templates" / "modelo_relatorio.docx"
 
-_MES_ANO = re.compile(r"(JANEIRO|FEVEREIRO|MAR[ÇC]O|ABRIL|MAIO|JUNHO|JULHO|AGOSTO|SETEMBRO|OUTUBRO|NOVEMBRO|DEZEMBRO)/(\d{4})")
+_MES_ANO = re.compile(r"\b(JANEIRO|FEVEREIRO|MAR[ÇC]O|ABRIL|MAIO|JUNHO|JULHO|AGOSTO|SETEMBRO|OUTUBRO|NOVEMBRO|DEZEMBRO)/(\d{4})\b")
 
 VM = "taxa_de_utilizacao_de_ventilacao_mecanica"
 # título compacto da tabela -> (variável, filtro). Ordem importa: mais específico primeiro.

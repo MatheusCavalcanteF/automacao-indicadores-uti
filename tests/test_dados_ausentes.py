@@ -1,5 +1,8 @@
 """Linhas não preenchidas e leito-dia sem crônicos inconsistente. Números sintéticos."""
 
+import openpyxl
+
+from extracao_producao import ler_producao
 from sanitizacao import SEM_DADOS, sanitizar
 from validacao import _conferir_leito_sem_cronicos
 
@@ -30,6 +33,49 @@ def test_bloco_parcialmente_vazio_nao_e_marcado():
     )
 
     assert dados[FILHO] == 0.0
+
+
+def test_linha_vazia_com_formula_zerada_ao_lado_nao_vira_zero():
+    outro = BLOCO + "__nascidos"
+    dados, _, _ = sanitizar(
+        {BLOCO: 0.0, FILHO: 0.0, outro: 0.0},
+        {BLOCO: [None] * 2, FILHO: [None] * 2, outro: [0.0, 0.0]},
+    )
+
+    assert dados[FILHO] == SEM_DADOS and dados[outro] == SEM_DADOS
+
+
+def _planilha_com_texto(tmp_path):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "UTI SET"
+    linhas = [
+        ["UTI - SETEMBRO/2026"],
+        ["DATAS", 1, 2, "TOTAL", "REALIZADO"],
+        ["PACIENTE DIA", 8, "1O", 8],
+        [],
+        ["TAXA EXEMPLO", None, None, "TOTAL", 0.5],
+        ["N. DE PACIENTES-DIA", 4, 4, "#VALUE!"],
+        ["N. DE LEITO-DIAS", 6, 6, 12],
+    ]
+    for linha in linhas:
+        ws.append(linha)
+    caminho = tmp_path / "producao.xlsx"
+    wb.save(caminho)
+    return caminho
+
+
+def test_texto_em_celula_de_dia_e_informado(tmp_path):
+    _, _, _, meta = ler_producao(_planilha_com_texto(tmp_path), "SETEMBRO")
+
+    assert meta["textos"] == [{"celula": "C3", "rotulo": "PACIENTE DIA", "valor": "1O"}]
+
+
+def test_erro_de_formula_no_total_nao_vira_titulo_de_bloco(tmp_path):
+    totais, _, _, _ = ler_producao(_planilha_com_texto(tmp_path), "SETEMBRO")
+
+    assert totais["taxa_exemplo__n_de_leito_dias"] == 12
+    assert "n_de_pacientes_dia__n_de_leito_dias" not in totais
 
 
 def _series(ultimo_sem_cronicos):

@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 import pandas as pd
+from openpyxl.utils import get_column_letter
 
 from utils import MESES, normalizar as _normalizar, periodo_da_cli, resolver_mes, sem_acento
 
@@ -99,6 +100,7 @@ def _ler_aba(planilha, mes_referencia):
 
     dados = bruto.iloc[lin_cab + 1:]
     totais, series, celulas = {}, {}, {}
+    textos = []  # células de dia com texto (ex.: "1O" no lugar de 10): ficam fora do total
     bloco = ""  # título do bloco pai; linha em branco encerra o bloco
     for idx, rotulo in dados[col_rotulo].items():
         nome = _normalizar(rotulo) if pd.notna(rotulo) else ""
@@ -106,14 +108,22 @@ def _ler_aba(planilha, mes_referencia):
             bloco = ""
             continue
 
-        total = pd.to_numeric(dados.at[idx, col_total], errors="coerce")
+        for c in cols_dias:
+            bruto_dia = dados.at[idx, c]
+            if isinstance(bruto_dia, str) and bruto_dia.strip():
+                textos.append({"celula": f"{get_column_letter(int(c) + 1)}{int(idx) + 1}",
+                               "rotulo": str(rotulo).strip(), "valor": bruto_dia})
+
+        bruto_total = dados.at[idx, col_total]
+        total = pd.to_numeric(bruto_total, errors="coerce")
         realizado = (
             pd.to_numeric(dados.at[idx, col_realizado], errors="coerce") if col_realizado is not None else float("nan")
         )
         valor = total if pd.notna(total) else realizado
 
-        # TOTAL não numérico: a linha é título de bloco (o valor, se houver, vem em REALIZADO).
-        if pd.isna(total):
+        # TOTAL com texto: a linha é título de bloco (o valor, se houver, vem em REALIZADO). TOTAL vazio
+        # dentro de um bloco é erro de fórmula (#VALUE! chega como NaN): a linha continua sendo do bloco.
+        if pd.isna(total) and (isinstance(bruto_total, str) or not bloco):
             bloco = nome
             chave = chave_variavel(nome)
         else:
@@ -136,7 +146,7 @@ def _ler_aba(planilha, mes_referencia):
             "col_fim": int(cols_dias[-1]) + 1,
             "rotulo": str(rotulo),
         }
-    meta = {"aba": aba, "col_rotulo": int(col_rotulo) + 1, "celulas": celulas}
+    meta = {"aba": aba, "col_rotulo": int(col_rotulo) + 1, "celulas": celulas, "textos": textos}
     return totais, series, titulo_aba, meta
 
 

@@ -129,6 +129,11 @@ def _executar(args, periodo):
         log.log(NIVEIS.get(nivel, logging.INFO), f"[{nivel}] {msg}")
         if nivel == "WARNING":  # valor inválido que a sanitização não conseguiu recalcular
             avisos["CRITICO"].append(msg)
+    for t in auxiliar["meta"]["textos"]:
+        msg = (f"{auxiliar['meta']['aba']}!{t['celula']} ({t['rotulo']}): texto '{t['valor']}' em célula numérica; "
+               "o dia ficou fora do total. Corrija a planilha e rode de novo.")
+        log.error(f"[ERRO] {msg}")
+        avisos["CRITICO"].append(msg)
 
     _corrigir_excel(auxiliar, correcoes, mes, avisos)
 

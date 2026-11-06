@@ -68,12 +68,13 @@ def _marcar_blocos_nao_preenchidos(dados, log, series):
     """Bloco cujas linhas têm todos os dias vazios não foi medido: o TOTAL 0 da fórmula não é um zero real."""
     def vazia(chave):
         dias = (series or {}).get(chave)
-        return bool(dias) and all(v is None for v in dias) and dados.get(chave) == 0
+        return bool(dias) and all(v is None for v in dias)
 
     blocos = {chave.partition("__")[0] for chave in dados if "__" in chave}
     for bloco in sorted(blocos):
         filhos = [k for k in dados if k.startswith(bloco + "__")]
-        if not all(vazia(k) for k in filhos):
+        # Basta uma linha vazia: a outra pode ser fórmula que aponta para ela e dá 0 em todos os dias.
+        if not all(dados.get(k) == 0 for k in filhos) or not any(vazia(k) for k in filhos):
             continue
         for chave in filhos + [bloco]:
             if chave in dados:

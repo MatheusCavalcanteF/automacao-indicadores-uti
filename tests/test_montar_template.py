@@ -111,6 +111,18 @@ def test_sumario_perde_so_a_linha_sem_destino(tmp_path):
     assert "com destino" in textos and "abre o campo" in textos
 
 
+def test_mes_do_documento_base_vira_variavel(tmp_path):
+    base = _base(tmp_path, "SETEMBRO/2026", "referente ao mês de SETEMBRO/2026, demonstrando", "Convênio Nº. 03527/2024")
+    modelo = montar(base, tmp_path / "modelo.docx")
+
+    assert _textos(modelo) == [
+        "{{ mes }}/{{ ano }}", "referente ao mês de {{ mes }}/{{ ano }}, demonstrando", "Convênio Nº. 03527/2024",
+    ]
+
+    saida, _, _ = gerar_relatorio_word({}, modelo, tmp_path / "r.docx", extras={"mes": "OUTUBRO", "ano": 2026})
+    assert _textos(saida)[0] == "OUTUBRO/2026"
+
+
 def test_paragrafo_sem_numero_fica_intacto_e_e_avisado(tmp_path, capsys):
     texto = "Tivemos um total de vários nascidos vivos na Unidade Exemplo."
     modelo = montar(_base(tmp_path, texto), tmp_path / "modelo.docx")
