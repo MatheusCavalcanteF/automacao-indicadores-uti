@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 import pandas as pd
+from openpyxl.utils import get_column_letter
 
 from utils import MESES, normalizar as _normalizar, periodo_da_cli, resolver_mes, sem_acento
 
@@ -54,18 +55,36 @@ def ler_producao(caminho_arquivo, mes_referencia):
     meta: {"aba": nome da aba, "col_rotulo": coluna do rótulo (1 = A), "celulas": {chave: {linha, col_valor,
         col_ini, col_fim, rotulo}}} — onde cada indicador mora no Excel, para corrigir a planilha.
     """
+    with _abrir_planilha(caminho_arquivo) as planilha:
+        return _ler_aba(planilha, mes_referencia)
+
+
+def ler_meses(caminho_arquivo, meses):
+    """{mês: (totais, series)} de vários meses, abrindo o arquivo uma vez só. Aba ausente ou ilegível fica de fora."""
+    lidos = {}
+    with _abrir_planilha(caminho_arquivo) as planilha:
+        for mes in meses:
+            try:
+                totais, series, _, _ = _ler_aba(planilha, mes)
+            except ValueError:
+                continue
+            lidos[mes] = (totais, series)
+    return lidos
+
+
+def _abrir_planilha(caminho_arquivo):
     caminho = Path(caminho_arquivo)
     if not caminho.is_file():
         raise FileNotFoundError(f"Arquivo não encontrado: {caminho}")
-
     try:
-        planilha = pd.ExcelFile(caminho, engine="openpyxl")
+        return pd.ExcelFile(caminho, engine="openpyxl")
     except Exception as e:
         raise ValueError(f"Não foi possível abrir '{caminho.name}': {e}") from e
 
-    with planilha:
-        aba = _encontrar_aba(planilha.sheet_names, mes_referencia)
-        bruto = planilha.parse(aba, header=None)
+
+def _ler_aba(planilha, mes_referencia):
+    aba = _encontrar_aba(planilha.sheet_names, mes_referencia)
+    bruto = planilha.parse(aba, header=None)
 
     # Cabeçalhos mesclados e linhas em branco: acha a linha 'DATAS' em vez de fixar o skiprows.
     lin_cab, col_rotulo = _localizar_cabecalho(bruto)
@@ -81,6 +100,7 @@ def ler_producao(caminho_arquivo, mes_referencia):
 
     dados = bruto.iloc[lin_cab + 1:]
     totais, series, celulas = {}, {}, {}
+    textos = []  # células de dia com texto (ex.: "1O" no lugar de 10): ficam fora do total
     bloco = ""  # título do bloco pai; linha em branco encerra o bloco
     for idx, rotulo in dados[col_rotulo].items():
         nome = _normalizar(rotulo) if pd.notna(rotulo) else ""
@@ -88,14 +108,22 @@ def ler_producao(caminho_arquivo, mes_referencia):
             bloco = ""
             continue
 
-        total = pd.to_numeric(dados.at[idx, col_total], errors="coerce")
+        for c in cols_dias:
+            bruto_dia = dados.at[idx, c]
+            if isinstance(bruto_dia, str) and bruto_dia.strip():
+                textos.append({"celula": f"{get_column_letter(int(c) + 1)}{int(idx) + 1}",
+                               "rotulo": str(rotulo).strip(), "valor": bruto_dia})
+
+        bruto_total = dados.at[idx, col_total]
+        total = pd.to_numeric(bruto_total, errors="coerce")
         realizado = (
             pd.to_numeric(dados.at[idx, col_realizado], errors="coerce") if col_realizado is not None else float("nan")
         )
         valor = total if pd.notna(total) else realizado
 
-        # TOTAL não numérico: a linha é título de bloco (o valor, se houver, vem em REALIZADO).
-        if pd.isna(total):
+        # TOTAL com texto: a linha é título de bloco (o valor, se houver, vem em REALIZADO). TOTAL vazio
+        # dentro de um bloco é erro de fórmula (#VALUE! chega como NaN): a linha continua sendo do bloco.
+        if pd.isna(total) and (isinstance(bruto_total, str) or not bloco):
             bloco = nome
             chave = chave_variavel(nome)
         else:
@@ -118,7 +146,7 @@ def ler_producao(caminho_arquivo, mes_referencia):
             "col_fim": int(cols_dias[-1]) + 1,
             "rotulo": str(rotulo),
         }
-    meta = {"aba": aba, "col_rotulo": int(col_rotulo) + 1, "celulas": celulas}
+    meta = {"aba": aba, "col_rotulo": int(col_rotulo) + 1, "celulas": celulas, "textos": textos}
     return totais, series, titulo_aba, meta
 
 

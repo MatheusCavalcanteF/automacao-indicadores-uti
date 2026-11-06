@@ -1,8 +1,9 @@
 """Monta templates/modelo_relatorio.docx a partir do relatório de um mês anterior (.docx).
 
 Troca os números do mês por variáveis docxtpl ({{ var | filtro }}), esvazia as análises
-narrativas e a lista de pacientes (viram marcadores amarelos [PREENCHER]) e imprime os textos
-com números que continuam fixos, para revisão. Rode de novo se o modelo-base mudar:
+narrativas e a lista de pacientes (viram marcadores amarelos [PREENCHER]), marca as imagens de
+gráfico para o gerador trocá-las (ver graficos.py) e imprime os textos com números que continuam
+fixos, para revisão. Rode de novo se o modelo-base mudar:
 
     python scripts/montar_template.py [base.docx] [saida.docx]
 """
@@ -18,15 +19,16 @@ from docx.oxml.ns import qn
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 
+from graficos import GRAFICOS, marcar_imagem, meta_do_contratado, tem_imagem
 from utils import sem_acento
 
 DIAS_MAX = 31  # colunas de dia das tabelas diárias; meses mais curtos deixam as últimas em branco
 
 RAIZ = Path(__file__).resolve().parent.parent
-BASE = RAIZ / "templates" / "junho_convertido.docx"
+BASE = RAIZ / "templates" / "setembro_convertido.docx"
 SAIDA = RAIZ / "templates" / "modelo_relatorio.docx"
 
-_MES_ANO = re.compile(r"(JANEIRO|FEVEREIRO|MAR[ÇC]O|ABRIL|MAIO|JUNHO|JULHO|AGOSTO|SETEMBRO|OUTUBRO|NOVEMBRO|DEZEMBRO)/(\d{4})")
+_MES_ANO = re.compile(r"\b(JANEIRO|FEVEREIRO|MAR[ÇC]O|ABRIL|MAIO|JUNHO|JULHO|AGOSTO|SETEMBRO|OUTUBRO|NOVEMBRO|DEZEMBRO)/(\d{4})\b")
 
 VM = "taxa_de_utilizacao_de_ventilacao_mecanica"
 # título compacto da tabela -> (variável, filtro). Ordem importa: mais específico primeiro.
@@ -248,6 +250,26 @@ def _ajustar_largura(el, delta):
     alvo.set(qn("w:w"), str(max(atual + delta, 0)))
 
 
+def remover_coluna_final_vazia(tabela):
+    """Remove a coluna sobrando à direita da taxa, para TOTAL e taxa serem as duas últimas.
+
+    Só age se a última célula de todas as linhas for simples e vazia. Retorna True se removeu.
+    """
+    tbl = tabela._tbl
+    ultimas = [tr.tc_lst[-1] for tr in tbl.tr_lst]
+    if any(tc.grid_span != 1 or "".join(t.text or "" for t in tc.iter(qn("w:t"))).strip() for tc in ultimas):
+        return False
+    grade = tbl.tblGrid.gridCol_lst
+    largura = _largura(grade[-1]) or 0
+    _remover(grade[-1])
+    _ajustar_largura(grade[0], largura)  # o rótulo recebe a largura, para a tabela não encolher
+    for tr, tc in zip(tbl.tr_lst, ultimas):
+        _remover(tc)
+        if tr.tc_lst[0].grid_span == 1:
+            _ajustar_largura(tr.tc_lst[0], largura)
+    return True
+
+
 def garantir_colunas_de_dia(tabela, dias=DIAS_MAX):
     """Tabela diária (rótulo | dia 1..N | TOTAL | taxa) com N < `dias` ganha as colunas que faltam.
 
@@ -284,8 +306,76 @@ def garantir_colunas_de_dia(tabela, dias=DIAS_MAX):
     return adicionadas
 
 
+def remover_entradas_sumario_sem_destino(doc):
+    """Tira do sumário as linhas que apontam para título apagado (viram 'Error! Bookmark' ao imprimir).
+
+    Mantém a linha que abre ou fecha o campo do sumário, para não quebrar os demais itens.
+    Retorna quantas linhas removeu.
+    """
+    corpo = doc.element.body
+    destinos = {b.get(qn("w:name")) for b in corpo.iter(qn("w:bookmarkStart"))}
+    removidas = 0
+    for p in list(corpo.iterchildren(qn("w:p"))):
+        instrucoes = " ".join(i.text or "" for i in p.iter(qn("w:instrText")))
+        alvo = re.search(r"PAGEREF\s+(\S+)", instrucoes)
+        tipos = [f.get(qn("w:fldCharType")) for f in p.iter(qn("w:fldChar"))]
+        if alvo and alvo.group(1) not in destinos and tipos.count("begin") == tipos.count("end"):
+            _remover(p)
+            removidas += 1
+    return removidas
+
+
+def marcar_graficos(doc, elementos):
+    """Liga cada imagem de gráfico ao indicador da tabela logo antes dela, gravando chave e meta na imagem.
+
+    Só vale imagem antes da próxima tabela. Sem marcador, o gerador não troca a imagem: por isso
+    imagem ou tabela sem par entram em aviso. Imagens antes da primeira tabela (capa) ficam fora.
+    Retorna quantas imagens marcou.
+    """
+    pendente, viu_indicador, marcadas = None, False, 0
+    sem_imagem, sem_tabela, sem_meta = [], 0, []
+    for el in elementos:
+        if el.tag.endswith("}tbl"):
+            if pendente:
+                sem_imagem.append(pendente[0])
+            tabela = Table(el, doc)
+            titulo = _compacto(tabela.rows[0].cells[1].text) if len(tabela.rows[0].cells) > 1 else ""
+            regra = next((r for r in TABELAS if titulo.startswith(r[0])), None)
+            cab = next((r for r in tabela.rows[:-1] if any(c.text.strip() == "Contratado" for c in r.cells)), None)
+            pendente = None
+            if regra and cab:
+                viu_indicador = True
+                idx = [c.text.strip() for c in cab.cells].index("Contratado")
+                meta = meta_do_contratado(tabela.rows[-1].cells[idx].text, regra[2], regra[1])
+                pendente = (regra[1], meta)
+        elif el.tag.endswith("}p") and tem_imagem(el):
+            if pendente:
+                chave, meta = pendente
+                if chave not in GRAFICOS:
+                    sem_imagem.append(chave)
+                else:
+                    marcar_imagem(el, chave, meta)
+                    marcadas += 1
+                    if meta is None:
+                        sem_meta.append(chave)
+                pendente = None
+            elif viu_indicador:
+                sem_tabela += 1
+    if pendente:
+        sem_imagem.append(pendente[0])
+    if sem_imagem:
+        print("[aviso] indicadores sem imagem de gráfico no modelo-base:", sem_imagem)
+    if sem_tabela:
+        print(f"[aviso] {sem_tabela} imagem(ns) sem tabela de indicador antes: ficam fixas no relatório.")
+    if sem_meta:
+        print("[aviso] gráficos sem meta (célula 'Contratado' sem número):", sem_meta)
+    return marcadas
+
+
 def montar(base=BASE, saida=SAIDA):
     doc = Document(base)
+    if removidas := remover_entradas_sumario_sem_destino(doc):
+        print(f"[info] {removidas} linha(s) do sumário sem destino removida(s).")
     elementos = list(doc.element.body.iterchildren())
     protegidos = set()
 
@@ -301,7 +391,7 @@ def montar(base=BASE, saida=SAIDA):
         if not el.tag.endswith("}p"):
             continue
         p = Paragraph(el, doc)
-        texto = p.text.strip()
+        texto = p.text.strip().lstrip("- ")  # alguns relatórios abrem a frase com "- "
         for inicio, novos in PARAGRAFOS:
             if texto.startswith(inicio) and contadores[inicio] < len(novos):
                 novo = novos[contadores[inicio]]
@@ -316,6 +406,10 @@ def montar(base=BASE, saida=SAIDA):
     faltou = [i for i, c in contadores.items() if c != esperado[i]]
     if faltou:
         print("[aviso] parágrafos de base não encontrados no modelo-base:", faltou)
+
+    # Gráficos: imagem ligada à tabela do indicador (e a meta lida do "Contratado", que o passo 3 não muda).
+    if marcadas := marcar_graficos(doc, elementos):
+        print(f"[info] {marcadas} imagem(ns) de gráfico marcada(s) para geração automática.")
 
     # 3) Células "Realizado" das tabelas de indicador.
     sem_mapa = []
@@ -344,10 +438,11 @@ def montar(base=BASE, saida=SAIDA):
             continue
         tabela = Table(el, doc)
         if len(tabela.columns) >= 33:
-            if garantir_colunas_de_dia(tabela):  # o modelo-base (junho) tem 30 dias; o relatório precisa de 31
+            remover_coluna_final_vazia(tabela)
+            if garantir_colunas_de_dia(tabela):  # base de mês com 30 dias; o relatório precisa de 31
                 print(f"[info] tabela diária ampliada para {DIAS_MAX} colunas de dia.")
             diaria_cronicos = False
-            for r in tabela.rows[1:]:
+            for r in tabela.rows:  # a tabela de crônicos pode não ter linha de título
                 chave = LINHAS_DIARIAS.get(_compacto(r.cells[0].text))
                 if not chave:
                     continue

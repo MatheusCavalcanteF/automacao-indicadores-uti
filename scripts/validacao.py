@@ -14,6 +14,29 @@ CRUZADOS = [
 ]
 
 
+def _conferir_leito_sem_cronicos(dados, series):
+    """Leito-dia sem crônicos = leito-dia global - crônicos, dia a dia. Não altera o valor; só avisa."""
+    leitos = series.get("leito_dia_global") or []
+    cronicos = series.get("paciente_dia_cronicos") or []
+    sem_cronicos = series.get("leito_dia_sem_os_cronicos") or []
+    errados = [
+        (dia, c, a - b)
+        for dia, (a, b, c) in enumerate(zip(leitos, cronicos, sem_cronicos), start=1)
+        if None not in (a, b, c) and abs(a - b - c) > 0.5
+    ]
+    if not errados:
+        return []
+    dias = ", ".join(f"dia {d}: {c:g} (esperado {e:g})" for d, c, e in errados)
+    esperado = dados.get("leito_dia_sem_os_cronicos", 0) + sum(e - c for _, c, e in errados)
+    msg = (f"leito-dia sem crônicos diferente de leito-dia global - crônicos em {dias}. "
+           f"Total na planilha: {dados.get('leito_dia_sem_os_cronicos'):g}; esperado: {esperado:g}.")
+    pacientes = dados.get("taxa_de_ocupacao_sem_os_cronicos__n_de_pacientes_dia")
+    if _num(pacientes) and esperado:
+        atual, nova = dados.get("taxa_de_ocupacao_sem_os_cronicos"), pacientes / esperado
+        msg += f" A taxa de ocupação sem crônicos passaria de {atual:.2%} para {nova:.2%}.".replace(".", ",", 2)
+    return [("AVISO", msg)]
+
+
 def validar(dados, series, titulo_aba, mes, ano, dias_modelo=None):
     """dias_modelo: maior dia que as tabelas diárias do modelo Word comportam (None = não conferir)."""
     problemas = []
@@ -44,6 +67,8 @@ def validar(dados, series, titulo_aba, mes, ano, dias_modelo=None):
     for descricao, a, b in CRUZADOS:
         if _num(dados.get(a)) and _num(dados.get(b)) and dados[a] != dados[b]:
             problemas.append(("AVISO", f"{descricao}: {dados[a]:g} x {dados[b]:g}."))
+
+    problemas.extend(_conferir_leito_sem_cronicos(dados, series))
 
     # 5) TOTAL da planilha = soma dos dias (linhas de contagem). Divergência indica fórmula quebrada.
     for chave, serie in series.items():
